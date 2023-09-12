@@ -1,0 +1,850 @@
+
+<!DOCTYPE html>
+<html>
+<head></head>
+<body>
+
+<canvas id="mycanvas" width="400" height="300"></canvas>
+<button type="button" onclick="requestDevice()">Connect</button><br />
+<button type="button" onclick="clearSlot(0)">Clear slot 0</button><br />
+<button type="button" onclick="clearSlot(1)">Clear slot 1</button><br />
+<button type="button" onclick="clearSlot(2)">Clear slot 2</button><br />
+<button type="button" onclick="clearSlot(3)">Clear slot 3</button><br />
+<button type="button" onclick="setAutocenter(0)">Deactivate Auto-Center</button><br />
+<button type="button" onclick="setAutocenter(.01)">Set Auto-Center 1%</button><br />
+<button type="button" onclick="setAutocenter(.1)">Set Auto-Center 10%</button><br />
+<button type="button" onclick="setAutocenter(.25)">Set Auto-Center 25%</button><br />
+<button type="button" onclick="setAutocenter(.5)">Set Auto-Center 50%</button><br />
+<button type="button" onclick="setAutocenter(.75)">Set Auto-Center 75%</button><br />
+<button type="button" onclick="setAutocenter(1)">Set Auto-Center 100%</button><br />
+
+<!--<button type="button" onclick="setRange(0)">Set Range 0 (lock wheel)</button><br />-->
+<!--<button type="button" onclick="setRange(1)">Set Range 1°</button><br />-->
+<!--<button type="button" onclick="setRange(10)">Set Range 10°</button><br />-->
+<button type="button" onclick="setRange(90)">Set Range 90°</button><br />
+<button type="button" onclick="setRange(180)">Set Range 180°</button><br />
+<button type="button" onclick="setRange(270)">Set Range 270°</button><br />
+<button type="button" onclick="setRange(360)">Set Range 360°</button><br />
+<button type="button" onclick="setRange(900)">Set Range 900°</button><br />
+<!--<button type="button" onclick="setRange(922)">Set Range 922 (max)</button><br />-->
+<!--<button type="button" onclick="setRange(923)">Set Range 923 (disable wheel inputs)</button><br />-->
+<!--<button type="button" onclick="setRange(924)">Set Range 924 (invalid, possibly damaging)</button><br />-->
+
+<!--
+<button type="button" onclick="extCmd1()">Send EXT_CMD1 (DF-EX compatibility mode switch)</button><br />
+<button type="button" onclick="extCmd9_DFEX()">Send EXT_CMD9/DFEX (DF-EX compatibility mode switch)</button><br />
+<button type="button" onclick="extCmd9_DFP()">Send EXT_CMD9/DFP (DFP compatibility mode switch)</button><br />
+<button type="button" onclick="extCmd9_G25()">Send EXT_CMD9/G25 (G25 compatibility mode switch)</button><br />
+<button type="button" onclick="extCmd9_DFGT()">Send EXT_CMD9/DFGT (DFGT compatibility mode switch)</button><br />
+<button type="button" onclick="extCmd9_G27()">Send EXT_CMD9/G27 (G27 compatibility mode switch)</button><br />
+<button type="button" onclick="extCmd9_G29()">Send EXT_CMD9/G29 (G29 compatibility mode switch)</button><br />
+<button type="button" onclick="extCmd16()">Send EXT_CMD16 (G25 compatibility mode switch)</button><br />
+-->
+<button type="button" onclick="playEffect('dual-rumble', {duration:5000, strongMagnitude:1.0, weakMagnitude:0.0})">5 second strong rumble</button><br />
+
+
+<div id="mylog"></div>
+
+<script type="application/javascript">
+
+
+const VENDOR_LOGITECH = 0x046d;
+const PRODUCT_LOGITECH_G29_PS3 = 0xc24f;
+const PRODUCT_LOGITECH_G29_PS4 = 0xc260;
+
+const USAGE_PAGE_GENERIC_DESKTOP = 0x01;
+const USAGE_GENERIC_DESKTOP_JOYSTICK = 0x04;
+const kVendorLogitech = 0x046d;
+const kProductc24f = 0xc24f;
+const kProductc260 = 0xc260;
+
+const deviceFilters = [{
+    vendorId:VENDOR_LOGITECH,
+    usagePage:USAGE_PAGE_GENERIC_DESKTOP,
+    usage:USAGE_GENERIC_DESKTOP_JOYSTICK,
+}];
+
+var device = null;
+var padState = null;
+var dialCount = 0;
+var currentRange = null;
+var effectType = null;
+var effectParams = null;
+var effectStart = null;
+var effectEnd = null;
+var ffCount = 0;
+var strongMagnitude = 1.0;
+var weakMagnitude = 1.0;
+var canvas = document.getElementById('mycanvas');
+var ctx = canvas.getContext('2d');
+
+let canvasWidth = canvas.width;
+let canvasHeight = canvas.height;
+
+
+// Slot IDs make up a bitfield to allow multiple slots to be written at once.
+// 0x1_ Slot 1
+// 0x2_ Slot 2
+// 0x4_ Slot 3
+// 0x8_ Slot 4
+
+// Command IDs:
+// 0x_0 Turn off effect
+// 0x_1 Set effect
+// 0x_2 Maximum force to the right
+// 0x_4 Change mystery byte to 0x03
+// 0x_5 Change mystery byte to 0x02
+// 0x_C Set effect
+// 0x_E Set simple Autocenter (strength and relative proportions)
+
+// Effect IDs:
+// 0x_0 Constant Force
+// 0x_1 Auto/Anti Center
+// 0x_2 Friction Force
+// 0x_3 Auto/Anti Center
+// 0x_D Simple AutoCenter
+// 0x_F Deassociate
+
+// Examples:
+// 0x11: Set effect in slot 1
+// 0x13: Reset effect in slot 1
+// 0x21: Set effect in slot 2
+// 0x23: Reset effect in slot 2
+// 0x14: 
+
+
+// #define USB_DEVICE_ID_LOGITECH_G29_WHEEL 0xc24f
+// #define USB_DEVICE_ID_LOGITECH_G920_WHEEL 0xc262
+// #define USB_DEVICE_ID_LOGITECH_WHEEL 0xc294
+// #define USB_DEVICE_ID_LOGITECH_MOMO_WHEEL 0xc295
+// #define USB_DEVICE_ID_LOGITECH_DFP_WHEEL 0xc298
+// #define USB_DEVICE_ID_LOGITECH_G25_WHEEL 0xc299
+// #define USB_DEVICE_ID_LOGITECH_DFGT_WHEEL 0xc29a
+// #define USB_DEVICE_ID_LOGITECH_G27_WHEEL 0xc29b
+// #define USB_DEVICE_ID_LOGITECH_WII_WHEEL 0xc29c
+
+function onAnimationFrame(timestamp) {
+  const kBackgroundColor = '#e0e0e0';
+  ctx.fillStyle = kBackgroundColor;
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  // Draw outer steering wheel
+  const kWheelOuterRadius = 100;
+  const kWheelInnerRadius = 80;
+  const kWheelHubRadius = 30;
+
+  const midX = canvasWidth / 2;
+  const midY = canvasHeight / 2;
+  ctx.beginPath();
+  ctx.fillStyle = '#404040';
+  ctx.arc(midX, midY, kWheelOuterRadius, 0, 2*Math.PI);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.fillStyle = kBackgroundColor;
+  ctx.arc(midX, midY, kWheelInnerRadius, 0, 2*Math.PI);
+  ctx.fill();
+  // Draw inner steering wheel
+  ctx.beginPath();
+  ctx.fillStyle = '#404040';
+  ctx.arc(midX, midY, kWheelHubRadius, 0, 2*Math.PI);
+  ctx.fill();
+  
+  // Draw a bright blue dot on the wheel to indicate position
+  if (padState) {
+    ctx.beginPath();
+    ctx.fillStyle = '#80d0ff';
+    ctx.arc(midX + 90 * Math.sin(padState.wheelRotationRadians),
+            midY - 90 * Math.cos(padState.wheelRotationRadians),
+            8, 0, 2*Math.PI);
+    ctx.fill();
+  
+    // Draw a bar above the wheel to show the normalized axis
+    let x = midX + padState.axisWheelRotation * 100;
+    let minX, maxX;
+    if (x < midX) {
+      minX = x;
+      maxX = midX;
+    } else {
+      minX = midX;
+      maxX = x;
+    }
+    ctx.fillStyle = '#80d0ff';
+    ctx.fillRect(minX, midY - 130, maxX - minX, 20);
+    ctx.fillStyle = '#404040';
+    ctx.fillRect(x - 2, midY - 132, 4, 24);
+
+    // Draw pedals
+    let leftPedalHeight = 36 * padState.axisLeftPedal;
+    let centerPedalHeight = 36 * padState.axisCenterPedal;
+    let rightPedalHeight = 36 * padState.axisRightPedal;
+    ctx.fillStyle = '#404040';
+    ctx.fillRect(midX - 100, midY + 105, 50, 40);
+    ctx.fillStyle = '#80d0ff';
+    ctx.fillRect(midX - 98, midY + 107, 46, leftPedalHeight);
+    ctx.fillStyle = '#404040';
+    ctx.fillRect(midX - 25, midY + 105, 50, 40);
+    ctx.fillStyle = '#80d0ff';
+    ctx.fillRect(midX - 23, midY + 107, 46, centerPedalHeight);
+    ctx.fillStyle = '#404040';
+    ctx.fillRect(midX + 50, midY + 105, 50, 40);
+    ctx.fillStyle = '#80d0ff';
+    ctx.fillRect(midX + 52, midY + 107, 46, rightPedalHeight);
+
+    // Draw buttons
+    ctx.beginPath();
+    ctx.fillStyle = '#404040';
+    ctx.arc(midX + 150, midY - 50, 14, 0, 2*Math.PI);
+    ctx.fill();
+    if (padState.buttonCross) {
+      ctx.beginPath();
+      ctx.fillStyle = '#80d0ff';
+      ctx.arc(midX + 150, midY - 50, 12, 0, 2*Math.PI);
+      ctx.fill();
+    }
+    
+    ctx.beginPath();
+    ctx.fillStyle = '#404040';
+    ctx.arc(midX + 120, midY - 80, 14, 0, 2*Math.PI);
+    ctx.fill();
+    if (padState.buttonSquare) {
+      ctx.beginPath();
+      ctx.fillStyle = '#80d0ff';
+      ctx.arc(midX + 120, midY - 80, 12, 0, 2*Math.PI);
+      ctx.fill();
+    }
+    
+    ctx.beginPath();
+    ctx.fillStyle = '#404040';
+    ctx.arc(midX + 180, midY - 80, 14, 0, 2*Math.PI);
+    ctx.fill();
+    if (padState.buttonCircle) {
+      ctx.beginPath();
+      ctx.fillStyle = '#80d0ff';
+      ctx.arc(midX + 180, midY - 80, 12, 0, 2*Math.PI);
+      ctx.fill();
+    }
+    
+    ctx.beginPath();
+    ctx.fillStyle = '#404040';
+    ctx.arc(midX + 150, midY - 110, 14, 0, 2*Math.PI);
+    ctx.fill();
+    if (padState.buttonTriangle) {
+      ctx.beginPath();
+      ctx.fillStyle = '#80d0ff';
+      ctx.arc(midX + 150, midY - 110, 12, 0, 2*Math.PI);
+      ctx.fill();
+    }
+    
+    ctx.fillStyle = '#404040';
+    ctx.fillRect(midX - 192, midY - 92, 84, 24);
+    ctx.fillStyle = '#404040';
+    ctx.fillRect(midX - 162, midY - 122, 24, 84);
+    if (padState.dpadUp) {
+      ctx.fillStyle = '#80d0ff';
+      ctx.fillRect(midX - 160, midY - 120, 20, 26);
+    }
+    if (padState.dpadDown) {
+      ctx.fillStyle = '#80d0ff';
+      ctx.fillRect(midX - 160, midY - 66, 20, 26);
+    }
+    if (padState.dpadLeft) {
+      ctx.fillStyle = '#80d0ff';
+      ctx.fillRect(midX - 190, midY - 90, 26, 20);
+    }
+    if (padState.dpadRight) {
+      ctx.fillStyle = '#80d0ff';
+      ctx.fillRect(midX - 136, midY - 90, 26, 20);
+    }
+  }
+
+
+  window.requestAnimationFrame(onAnimationFrame);
+}
+window.requestAnimationFrame(onAnimationFrame);
+
+
+function processForceFeedback() {
+  if (padState === null)
+    return;
+  let now = new Date();
+  let t = now.valueOf();
+  let force = 0;
+  if (padState.buttonL1 && padState.buttonR1) {
+    let dir = (ffCount % 2) ? +1 : -1;
+    if (ffCount % 4 < 2) {
+      force += 0.225 * strongMagnitude * dir;
+    } else {
+      force += 0.2 * weakMagnitude * dir;
+    }
+  } else if (padState.buttonL1) {
+    let dir = (ffCount % 2) ? +1 : -1;
+    force += 0.2 * weakMagnitude * dir;
+  } else if (padState.buttonR1) {
+    let dir = (ffCount % 4 < 2) ? +1 : -1;
+    force += 0.225 * strongMagnitude * dir;
+  }
+  setForce(force);
+  ++ffCount;
+}
+setInterval(processForceFeedback, 15);
+
+function playEffect(type, params) {
+  if (type == 'dual-rumble') {
+    effectType = type;
+    effectParams = params;
+    effectStart = new Date();
+  }
+}
+
+function normalizeWheelAxis(value) {
+  if (value > 0xffff)
+    return 1.0;
+  if (value < 0x0000)
+    return -1.0;
+  return (2 * value / 0xffff) - 1.0;
+}
+
+function normalizePedalAxis(value) {
+  if (value > 0xff)
+    return 0.0;
+  if (value < 0x00)
+    return 1.0;
+  return 1.0 - value / 0xff;
+}
+
+function padStateFromInputReport(data) {
+  let bytes = new Uint8Array(data.buffer);
+  
+  let state = {};
+
+  state.dpad = bytes[0] & 0x0f;
+  state.buttonCross = !!(bytes[0] & 0x10);
+  state.buttonSquare = !!(bytes[0] & 0x20);
+  state.buttonCircle = !!(bytes[0] & 0x40);
+  state.buttonTriangle = !!(bytes[0] & 0x80);
+  state.buttonR1 = !!(bytes[1] & 0x01);
+  state.buttonL1 = !!(bytes[1] & 0x02);
+  state.buttonR2 = !!(bytes[1] & 0x04);
+  state.buttonL2 = !!(bytes[1] & 0x08);
+  state.buttonShare = !!(bytes[1] & 0x10);
+  state.buttonOptions = !!(bytes[1] & 0x20);
+  state.buttonR3 = !!(bytes[1] & 0x40);
+  state.buttonL3 = !!(bytes[1] & 0x80);
+  state.shifter1 = !!(bytes[2] & 0x01);
+  state.shifter2 = !!(bytes[2] & 0x02);
+  state.shifter3 = !!(bytes[2] & 0x04);
+  state.shifter4 = !!(bytes[2] & 0x08);
+  state.shifter5 = !!(bytes[2] & 0x10);
+  state.shifter6 = !!(bytes[2] & 0x20);
+  state.shifterR = !!(bytes[2] & 0x40);
+  state.buttonPlus = !!(bytes[2] & 0x80);
+  state.buttonMinus = !!(bytes[3] & 0x01);
+  state.dialClockwise = !!(bytes[3] & 0x02);
+  state.dialCounterclockwise = !!(bytes[3] & 0x04);
+  state.buttonDial = !!(bytes[3] & 0x08);
+  state.buttonPS = !!(bytes[3] & 0x10);
+  state.wheelRotation = (bytes[5] << 8) | bytes[4];
+  state.rightPedal = bytes[6];
+  state.centerPedal = bytes[7];
+  state.leftPedal = bytes[8];
+
+  // The D-pad state is encoded as a 4-bit value.
+  // 0b0000 to 0b0111 represent the 8 directional values, clockwise starting with Up.
+  // 0b1000 represents null input.
+  // For convenience, split the D-pad into the four directions.
+  state.dpadUp = (state.dpad == 0 || state.dpad == 1 || state.dpad == 7);
+  state.dpadDown = (state.dpad == 3 || state.dpad == 4 || state.dpad == 5);
+  state.dpadLeft = (state.dpad == 5 || state.dpad == 6 || state.dpad == 7);
+  state.dpadRight = (state.dpad == 1 || state.dpad == 2 || state.dpad == 3);
+
+  // For even more convenience, also provide the dpad as X and Y values normalized to [-1,+1].
+  if (state.dpadLeft && !state.dpadRight)
+    state.axisDpadX = -1.0;
+  else if (!state.dpadLeft && state.dpadRight)
+    state.axisDpadX = 1.0;
+  else
+    state.axisDpadX = 0.0;
+  if (state.dpadUp && !state.dpadDown)
+    state.axisDpadY = -1.0;
+  else if (!state.dpadUp && state.dpadDown)
+    state.axisDpadY = 1.0;
+  else
+    state.axisDpadY = 0.0;
+
+  // The shifter is encoded as 7 buttons representing each shifter position.
+  // When no buttons are pressed, the shifter is in neutral or between positions.
+  // For convenience, provide a single value representing the shifter state.
+  if (state.shifter1)
+    state.shifter = '1'
+  else if (state.shifter2)
+    state.shifter = '2'
+  else if (state.shifter3)
+    state.shifter = '3'
+  else if (state.shifter4)
+    state.shifter = '4'
+  else if (state.shifter5)
+    state.shifter = '5'
+  else if (state.shifter6)
+    state.shifter = '6'
+  else if (state.shifterR)
+    state.shifter = 'R';
+  else
+    state.shifter = '';
+
+  // One click of the dial sends multiple input reports. Count how many input
+  // reports are seen in a row to determine how many clicks the dial was turned.
+  if (state.dialClockwise) {
+    ++dialCount;
+  } else if (state.dialCounterclockwise) {
+    ++dialCount;
+  } else {
+    dialCount = 0;
+  }
+
+  // For convenience, provide normalized axes for the wheel and pedals.
+  state.axisWheelRotation = normalizeWheelAxis(state.wheelRotation);
+  state.axisLeftPedal = normalizePedalAxis(state.leftPedal);
+  state.axisCenterPedal = normalizePedalAxis(state.centerPedal);
+  state.axisRightPedal = normalizePedalAxis(state.rightPedal);
+
+  // Also provide wheel rotation in degrees and radians.
+  state.wheelRotationDegrees = state.axisWheelRotation * (currentRange / 2);
+  state.wheelRotationRadians = Math.PI * state.wheelRotationDegrees / 180.0;
+
+  return state;
+}
+
+function updatePadState(newState) {
+  let anyChange = false;
+  let oldState = padState;
+  if (oldState === null || oldState.dpad != newState.dpad) {
+    anyChange = true;
+    if (newState.dpad == 0)
+      console.log('D-pad N');
+    else if (newState.dpad == 1)
+      console.log('D-pad NE');
+    else if (newState.dpad == 2)
+      console.log('D-pad E');
+    else if (newState.dpad == 3)
+      console.log('D-pad SE');
+    else if (newState.dpad == 4)
+      console.log('D-pad S');
+    else if (newState.dpad == 5)
+      console.log('D-pad SW');
+    else if (newState.dpad == 6)
+      console.log('D-pad W');
+    else if (newState.dpad == 7)
+      console.log('D-pad NW');
+    else if (oldState)
+      console.log('D-pad neutral');
+  }
+  
+  let logButtonDiff = (a, b, name) => {
+    if (!a && b) {
+      console.log(name + ' down');
+      return true;
+    } else if (a && !b) {
+      console.log(name + ' up');
+      return true;
+    }
+    return false;
+  };
+  
+  if (logButtonDiff(oldState ? oldState.buttonCross : null, newState.buttonCross, 'X button'))
+    anyChange = true;
+  if (logButtonDiff(oldState ? oldState.buttonSquare : null, newState.buttonSquare, 'Square button'))
+    anyChange = true;
+  if (logButtonDiff(oldState ? oldState.buttonCircle: null, newState.buttonCircle, 'O button'))
+    anyChange = true;
+  if (logButtonDiff(oldState ? oldState.buttonTriangle: null, newState.buttonTriangle, 'Triangle button'))
+    anyChange = true;
+  if (logButtonDiff(oldState ? oldState.buttonR1: null, newState.buttonR1, 'R1 button'))
+    anyChange = true;
+  if (logButtonDiff(oldState ? oldState.buttonL1: null, newState.buttonL1, 'L1 button'))
+    anyChange = true;
+  if (logButtonDiff(oldState ? oldState.buttonR2: null, newState.buttonR2, 'R2 button'))
+    anyChange = true;
+  if (logButtonDiff(oldState ? oldState.buttonL2: null, newState.buttonL2, 'L2 button'))
+    anyChange = true;
+  if (logButtonDiff(oldState ? oldState.buttonShare: null, newState.buttonShare, 'Share button'))
+    anyChange = true;
+  if (logButtonDiff(oldState ? oldState.buttonOptions: null, newState.buttonOptions, 'Options button'))
+    anyChange = true;
+  if (logButtonDiff(oldState ? oldState.buttonR3: null, newState.buttonR3, 'R3 button'))
+    anyChange = true;
+  if (logButtonDiff(oldState ? oldState.buttonL3: null, newState.buttonL3, 'L3 button'))
+    anyChange = true;
+  if (logButtonDiff(oldState ? oldState.buttonPlus: null, newState.buttonPlus, 'Plus button'))
+    anyChange = true;
+  if (logButtonDiff(oldState ? oldState.buttonMinus: null, newState.buttonMinus, 'Minus button'))
+    anyChange = true;
+  if (logButtonDiff(oldState ? oldState.buttonDial: null, newState.buttonDial, 'Dial button'))
+    anyChange = true;
+  if (logButtonDiff(oldState ? oldState.buttonPS: null, newState.buttonPS, 'PS button'))
+    anyChange = true;
+
+  if (oldState && oldState.shifter != newState.shifter) {
+    anyChange = true;
+    if (newState.shifter == '')
+      console.log('Shifter neutral');
+    else if (newState.shifter == 'R')
+      console.log('Shifter reverse');
+    else
+      console.log('Shifter position ' + newState.shifter);
+  }
+  
+  if (newState.dialClockwise && (oldState === null || !oldState.dialClockwise))
+    anyChange = true;
+  else if (oldState && oldState.dialClockwise && !newState.dialClockwise)
+    anyChange = true;
+  if (newState.dialCounterclockwise && (oldState === null || !oldState.dialCounterclockwise ))
+    anyChange = true;
+  else if (oldState && oldState.dialCounterclockwise  && !newState.dialCounterclockwise )
+    anyChange = true;
+
+  if (newState.dialClockwise && dialCount % 2 == 1) {
+    console.log('Dial Clockwise');
+  }
+  if (newState.dialCounterclockwise && dialCount % 2 == 1) {
+    console.log('Dial Counterclockwise');
+  }
+
+  if (oldState && oldState.wheelRotation != newState.wheelRotation) {
+    anyChange = true;
+    console.log('Wheel ' + newState.wheelRotationDegrees + '°');
+  }
+  if (oldState && oldState.leftPedal != newState.leftPedal) {
+    anyChange = true;
+    console.log('Left pedal ' + newState.axisLeftPedal);
+  }
+  if (oldState && oldState.centerPedal != newState.centerPedal) {
+    anyChange = true;
+    console.log('Center pedal ' + newState.axisCenterPedal);
+  }
+  if (oldState && oldState.rightPedal != newState.rightPedal) {
+    anyChange = true;
+    console.log('Right pedal ' + newState.axisRightPedal);
+  }
+
+  padState = newState;
+  return anyChange;
+}
+
+function onDeviceReady() {
+  deactivateAutocenter();
+  setRange(900);
+}
+
+function onAnyChange(oldState, newState) {
+  if (oldState === null || oldState.shifter != newState.shifter) {
+    let shifter = newState.shifter;
+    if (shifter == '1') {
+      setRange(180);
+      setAutocenter(.5);
+    } else if (shifter == '2') {
+      setRange(270);
+      setAutocenter(.5);
+    } else if (shifter == '3') {
+      setRange(360);
+      setAutocenter(.5);
+    } else if (shifter == '4') {
+      setRange(540);
+      setAutocenter(.5);
+    } else if (shifter == '5') {
+      setRange(720);
+      setAutocenter(.5);
+    } else if (shifter == '6') {
+      setRange(900);
+      setAutocenter(.5);
+    } else if (shifter == 'R') {
+      setRange(900);
+      setAutocenter(0);
+    } else if (shifter == '') {
+      setAutocenter(0);
+    }
+  }
+}
+
+function onInputReport(event) {
+  let oldState = padState;
+  let newState = padStateFromInputReport(event.data);
+  if (updatePadState(newState))
+    onAnyChange(oldState, newState);
+}
+
+function extCmd1() {
+  if (!device) {
+    console.log('EXT_CMD1 failed, no device');
+    return;
+  }
+  // EXT_CMD1
+  device.sendReport(0, new Uint8Array([0xf8, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]));
+  console.log('EXT_CMD1');
+}
+
+function extCmd9_DFEX() {
+  if (!device) {
+    console.log('EXT_CMD9/DFEX failed, no device');
+    return;
+  }
+  // EXT_CMD10 (Revert mode upon USB reset)
+  device.sendReport(0, new Uint8Array([0xf8, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00]));
+  // EXT_CMD9 (Switch mode to DF-EX with detach)
+  device.sendReport(0, new Uint8Array([0xf8, 0x09, 0x00, 0x01, 0x00, 0x00, 0x00]));
+  console.log('DFEX compatibility mode');
+}
+
+function extCmd9_DFP() {
+  if (!device) {
+    console.log('EXT_CMD9/DFP failed, no device');
+    return;
+  }
+  // EXT_CMD10 (Revert mode upon USB reset)
+  device.sendReport(0, new Uint8Array([0xf8, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00]));
+  // EXT_CMD9 (Switch mode to DFP with detach)
+  device.sendReport(0, new Uint8Array([0xf8, 0x09, 0x01, 0x01, 0x00, 0x00, 0x00]));
+  console.log('DFP compatibility mode');
+}
+
+function extCmd9_G25() {
+  if (!device) {
+    console.log('EXT_CMD9/G25 failed, no device');
+    return;
+  }
+  // EXT_CMD10 (Revert mode upon USB reset)
+  device.sendReport(0, new Uint8Array([0xf8, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00]));
+  // EXT_CMD9 (Switch mode to G25 with detach)
+  device.sendReport(0, new Uint8Array([0xf8, 0x09, 0x02, 0x01, 0x00, 0x00, 0x00]));
+  console.log('G25 compatibility mode');
+}
+
+function extCmd9_DFGT() {
+  if (!device) {
+    console.log('EXT_CMD9/DFGT failed, no device');
+    return;
+  }
+  // EXT_CMD10 (Revert mode upon USB reset)
+  device.sendReport(0, new Uint8Array([0xf8, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00]));
+  // EXT_CMD9 (Switch mode to DFGT with detach)
+  device.sendReport(0, new Uint8Array([0xf8, 0x09, 0x03, 0x01, 0x00, 0x00, 0x00]));
+  console.log('DFGT compatibility mode');
+}
+
+function extCmd9_G27() {
+  if (!device) {
+    console.log('EXT_CMD9/G27 failed, no device');
+    return;
+  }
+  // EXT_CMD10 (Revert mode upon USB reset)
+  device.sendReport(0, new Uint8Array([0xf8, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00]));
+  // EXT_CMD9 (Switch mode to G27 with detach)
+  device.sendReport(0, new Uint8Array([0xf8, 0x09, 0x04, 0x01, 0x00, 0x00, 0x00]));
+  console.log('G27 compatibility mode');
+}
+
+function extCmd9_G29() {
+  if (!device) {
+    console.log('EXT_CMD9/G29 failed, no device');
+    return;
+  }
+  // EXT_CMD10 (Revert mode upon USB reset)
+  device.sendReport(0, new Uint8Array([0xf8, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00]));
+  // EXT_CMD9 (Switch mode to G29 with detach)
+  device.sendReport(0, new Uint8Array([0xf8, 0x09, 0x05, 0x01, 0x01, 0x00, 0x00]));
+  console.log('G29 compatibility mode');
+}
+
+function extCmd16() {
+  if (!device) {
+    console.log('EXT_CMD16 failed, no device');
+    return;
+  }
+  // EXT_CMD16
+  device.sendReport(0, new Uint8Array([0xf8, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00]));
+  console.log('EXT_CMD16');
+}
+
+function clearSlot(slot) {
+  let cmd = (0x10 << slot) | 0x03;
+  device.sendReport(0, new Uint8Array([cmd, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00]));
+}
+
+function activateAutocenter() {
+  if (!device) {
+    console.log('activateAutocenter failed, no device');
+    return;
+  }
+  device.sendReport(0, new Uint8Array([0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]));
+  console.log('Auto-Center enabled');
+}
+
+function deactivateAutocenter() {
+  if (!device) {
+    console.log('deactivateAutocenter failed, no device');
+    return;
+  }
+  device.sendReport(0, new Uint8Array([0xf5, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]));
+  console.log('Auto-Center disabled');
+}
+
+function setAutocenter(magnitude) {
+  if (magnitude < 0.0 || magnitude > 1.0) {
+    console.log('setAutocenter failed, invalid magnitude');
+    return;
+  }
+  if (!device) {
+    console.log('setAutocenter failed, no device');
+    return;
+  }
+  if (magnitude == 0.0) {
+    deactivateAutocenter();
+    return;
+  }
+
+  // Send default centering command.
+  let value = magnitude * 0xffff;
+  let expand_a, expand_b;
+  if (value <= 0xaaaa) {
+    expand_a = 0x0c * value;
+    expand_b = 0x80 * value;
+  } else {
+    expand_a = (0x0c * 0xaaaa) + 0x06 * (value - 0xaaaa);
+    expand_b = (0x80 * 0xaaaa) + 0xff * (value - 0xaaaa);
+  }
+  expand_a /= 0xaaaa;
+  expand_b /= 0xaaaa;
+  // 0xFE0D: custom auto-center
+  // byte 3-4: effect strength, 0x00 to 0x0f
+  // byte 5: rate the effect strength rises as the wheel turns, 0x00 to 0xff
+  device.sendReport(0, new Uint8Array([0xfe, 0x0d, expand_a, expand_a, expand_b, 0x00, 0x00]));
+  console.log('Auto-Center set to ' + magnitude);
+
+  activateAutocenter();
+}
+
+function setRange(range) {
+  if (range < 0 || range > 0xffff) {
+    console.log('setRange failed, invalid range');
+    return;
+  }
+  if (!device) {
+    console.log('setRange failed, no device');
+    return;
+  }
+  device.sendReport(0, new Uint8Array([0xf8, 0x81, range & 0x00ff, (range & 0xff00) >> 8, 0x00, 0x00, 0x00]));
+  console.log('Wheel range set to ' + range);
+  currentRange = range;
+}
+
+function setLeds(leds) {
+  if (leds < 0 || leds > 0xff) {
+    console.log('setLeds failed, invalid leds');
+    return;
+  }
+  if (!device) {
+    console.log('setLeds failed, no device');
+    return;
+  }
+  device.sendReport(0, new Uint8Array([0xf8, 0x12, leds, 0x00, 0x00, 0x00, 0x00]));
+  console.log('LEDs set to ' + leds);
+}
+
+function setForce(force) {
+  if (force < -1.0 || force > +1.0) {
+    console.log('setForce failed, invalid force');
+    return;
+  }
+  if (!device) {
+    console.log('setForce failed, no device');
+    return;
+  }
+  let value = (force + 1.0) * 0xFF / 2.0;
+  device.sendReport(0, new Uint8Array([0x11, 0x08, value, 0x00, 0x00, 0x00, 0x00]));
+  console.log('Force set to ' + force);
+}
+
+function changeDevice(newDevice) {
+  if (newDevice === null) {
+    console.log('changeDevice new device is null');
+    return false;
+  }
+  if (!newDevice.opened) {
+    console.log('changeDevice new device is not open');
+    return false;
+  }
+  if (device === newDevice) {
+    console.log('changeDevice got same device ' + device.productName);
+    return false;
+  }
+
+  // Clean up old device.
+  if (device) {
+    console.log('changeDevice disconnecting ' + device.productName);
+    device.oninputreport = null;
+    device.close();
+    device = null;
+  }
+
+  // Set up new device.
+  device = newDevice;
+  device.oninputreport = onInputReport;
+  console.log('changeDevice connected to ' + device.productName);
+  onDeviceReady();
+  return true;
+}
+
+async function requestDevice() {
+  let dd = await navigator.hid.requestDevice({filters:deviceFilters});
+  if (dd.length == 0) {
+    console.log('requestDevice chooser dismissed with no selection.');
+    return null;
+  }
+  let d = dd[0];
+  
+  if (d === device) {
+    console.log('requestDevice chooser returned the same device.');
+    return device;
+  }
+  
+  if (!d.opened) {
+    await d.open();
+  }
+  if (!d.opened) {
+    console.log('requestDevice failed to open the device.');
+    return null;
+  }
+  if (changeDevice(d)) {
+    console.log('requestDevice changed to a new device');
+  } else {
+    console.log('requestDevice did not change the device');
+  }
+  return device;
+}
+
+async function checkGetDevices() {
+  if (device) {
+    console.log('checkGetDevices aborted');
+    return;
+  }
+  let devices = await navigator.hid.getDevices();
+  for (let i = 0; i < devices.length; ++i) {
+    let d = devices[0];
+    if (d.vendorId == VENDOR_LOGITECH) {
+      console.log('checkGetDevices found ' + d.productName);
+      if (!d.opened) {
+        await d.open();
+      }
+      if (d.opened) {
+        changeDevice(d);
+        return;
+      }
+    }
+  }
+  console.log('checkGetDevices no matching device found');
+}
+
+checkGetDevices();
+
+</script>
+</body>
+</html>
